@@ -266,6 +266,46 @@ class OpenAIGenerator:
         return answer
 
 
+class GeminiGenerator:
+    def __init__(self, api_key: str, model: str = "gemini-flash-lite-latest", max_output_tokens: int = 300) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.max_output_tokens = max_output_tokens
+
+    def generate(self, prompt: str) -> str:
+        import urllib.request
+        import json
+        import time
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.0,
+                "maxOutputTokens": self.max_output_tokens,
+            }
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            ans = parts[0].get("text", "").strip()
+                            if ans:
+                                time.sleep(1.0)
+                                return ans
+            except Exception as e:
+                if attempt == 4:
+                    raise
+                time.sleep(2.0 * (attempt + 1))
+        raise RuntimeError("Gemini returned empty answer")
+
+
 @dataclass(frozen=True)
 class DomainResponse:
     question: str
@@ -296,10 +336,16 @@ class DomainAssistant:
         top_k: int = 5,
     ) -> DomainAssistant:
         corpus_id, chunks = load_corpus(corpus_dir)
+        if generator is None:
+            gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+            if gemini_key:
+                generator = GeminiGenerator(gemini_key, model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"))
+            else:
+                generator = OpenAIGenerator()
         return cls(
             corpus_id,
             BM25Retriever(chunks),
-            generator if generator is not None else OpenAIGenerator(),
+            generator,
             top_k,
         )
 
